@@ -1,4 +1,4 @@
-//! `OpenAiBridge` — concrete [`Bridge`] implementation for OpenAI.
+//! `OpenAiBridge` -- concrete [`Bridge`] implementation for OpenAI.
 //!
 //! Also reusable by OpenAI-compatible providers (DeepSeek, Gemini's
 //! OpenAI-compat endpoint) since their request/response wire shapes
@@ -69,7 +69,7 @@ fn developer_role_mode(ctx: &BridgeContext) -> DeveloperRoleMode {
 }
 
 /// Default OpenAI upstream host. Used only when `ProviderKey.api_base`
-/// is empty AND the dispatching PK identifies the openai vendor — the
+/// is empty AND the dispatching PK identifies the openai vendor -- the
 /// family-bridge safety guard in `resolve_base` refuses this fallback
 /// for any non-openai vendor (would otherwise leak the vendor's API
 /// key to api.openai.com).
@@ -125,12 +125,12 @@ impl OpenAiBridge {
     /// `/v1` synthesis happens **only for the canonical OpenAI host**.
     /// Corporate proxies, alternative deployments, and any non-default
     /// path the operator chose on purpose pass through unchanged after
-    /// suffix stripping — the operator's intent on a non-canonical
+    /// suffix stripping -- the operator's intent on a non-canonical
     /// host wins.
     ///
     /// Family-bridge safety: when the dispatching `ProviderKey.provider`
     /// identifies a vendor that ISN'T openai AND `api_base` is empty,
-    /// the bridge refuses to fall back to `OPENAI_DEFAULT_BASE` — that
+    /// the bridge refuses to fall back to `OPENAI_DEFAULT_BASE` -- that
     /// would silently route the vendor's API key to `api.openai.com`.
     /// Closes the openrouter / xai / future-long-tail half of
     /// api7/AISIX-Cloud#417. cp-api must populate `api_base` for every
@@ -155,7 +155,7 @@ impl OpenAiBridge {
                 let pk_vendor_normalized = pk_vendor_raw.trim().to_ascii_lowercase();
                 if !pk_vendor_normalized.is_empty() && pk_vendor_normalized != "openai" {
                     // Operator-facing detail (route, provider topology,
-                    // remediation steps) goes to logs only — keep the
+                    // remediation steps) goes to logs only -- keep the
                     // customer-visible 500 body short and free of
                     // internal-product taxonomy (cp-api / adapter_map /
                     // provider_metadata field names are not part of any
@@ -220,7 +220,7 @@ fn strip_known_endpoint(base: &str) -> &str {
 /// canonical `https://api.openai.com` host (a common copy-paste
 /// habit). Corporate proxies, alternative deployments, and every
 /// non-OpenAI vendor's upstream host pass through verbatim after
-/// suffix stripping — the operator's path on a non-canonical host
+/// suffix stripping -- the operator's path on a non-canonical host
 /// is trusted as-is.
 ///
 /// See [`OpenAiBridge::resolve_base`] for accepted forms.
@@ -229,7 +229,7 @@ fn normalize_api_base(base: &str) -> String {
     normalize_canonical_openai(stripped)
 }
 
-/// Canonical OpenAI hosts. Both schemes covered for ops convenience —
+/// Canonical OpenAI hosts. Both schemes covered for ops convenience --
 /// in production only `https://` is meaningful.
 const OPENAI_CANONICAL_HOSTS: &[&str] = &["https://api.openai.com", "http://api.openai.com"];
 
@@ -346,24 +346,52 @@ where
 fn prepare_outbound_body<T: serde::Serialize>(
     typed: &T,
     reasoning_model: bool,
+    provider: &str,
     request: Option<&RequestOverrides>,
     response: Option<&ResponseOverrides>,
 ) -> Result<Value, BridgeError> {
     let mut body = serde_json::to_value(typed)
         .map_err(|e| BridgeError::Config(format!("serialize request body: {e}")))?;
-    apply_outbound_overrides(&mut body, reasoning_model, request, response);
+    apply_outbound_overrides(&mut body, reasoning_model, provider, request, response);
     Ok(body)
 }
 
 /// The override pipeline [`prepare_outbound_body`] runs, on a body the
 /// caller already owns as a `Value`.
+/// Strip fields that only the OpenAI Responses API defines. The
+/// family bridge forwards `ChatFormat.extra` (which carries every
+/// unknown top-level field the client sent) verbatim into the
+/// `/chat/completions` body, and `prompt_cache_key` is a Responses-only
+/// param. Upstreams whose OpenAI-compat surface is the chat completions
+/// endpoint (Gemini, DeepSeek, �) reject unknown names with 400 �
+/// the error the caller saw. OpenAI itself tolerates the extra field
+/// on chat completions, so canonical OpenAI is left untouched.
+///
+/// `prompt_cache_key` is the only Responses-only field currently known
+/// to leak; the list grows as callers discover more.
+const RESPONSES_ONLY_FIELDS: &[&str] = &["prompt_cache_key"];
+
+fn strip_responses_only_fields(body: &mut Value, provider: &str) {
+    if provider.eq_ignore_ascii_case("openai") {
+        return;
+    }
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    for key in RESPONSES_ONLY_FIELDS {
+        obj.remove(*key);
+    }
+}
+
 fn apply_outbound_overrides(
     body: &mut Value,
     reasoning_model: bool,
+    provider: &str,
     request: Option<&RequestOverrides>,
     response: Option<&ResponseOverrides>,
 ) {
     close_strict_response_format_schema(body);
+    strip_responses_only_fields(body, provider);
     // Before `param_renames`, so an operator's explicit rename wins.
     if reasoning_model {
         crate::reasoning::apply_reasoning_token_cap(body);
@@ -388,7 +416,7 @@ fn apply_outbound_overrides(
 }
 
 /// The wire bytes of an outbound body. Called where the `Value` is a
-/// temporary, so it is gone before the upstream is awaited — see
+/// temporary, so it is gone before the upstream is awaited -- see
 /// [`aisix_gateway::json_body`].
 fn outbound_bytes(body: &Value) -> Result<Bytes, BridgeError> {
     aisix_gateway::json_body(body)
@@ -400,7 +428,7 @@ fn outbound_bytes(body: &Value) -> Result<Bytes, BridgeError> {
 /// the schema must carry `additionalProperties: false` and list each of
 /// its declared properties in `required`, or the API rejects it.
 ///
-/// Public because every OpenAI-wire edge has to apply it — Azure
+/// Public because every OpenAI-wire edge has to apply it -- Azure
 /// OpenAI builds its own body from the same typed structs, and an
 /// edge that skips this rejects a strict schema the caller never had
 /// to write out in full.
@@ -409,7 +437,7 @@ fn outbound_bytes(body: &Value) -> Result<Bytes, BridgeError> {
 /// assembled because the promotion is only correct for *this* wire. The
 /// same normalised request also reaches the Anthropic, Bedrock and
 /// Gemini edges, and there `required` is an ordinary keyword whose
-/// contents are the caller's own statement — promoting it would silently
+/// contents are the caller's own statement -- promoting it would silently
 /// make their optional fields mandatory. A caller who sent `strict`
 /// themselves gets the same treatment they would have got from OpenAI's
 /// own validation, so a schema that was already complete is unchanged.
@@ -429,7 +457,7 @@ pub fn close_strict_response_format_schema(body: &mut Value) {
 /// x-aisix-request-id, and optionally Accept: text/event-stream
 /// for streaming calls), then merge any `default_headers` the PK carries.
 /// Bridge-owned headers are inserted before the merge, which is what makes
-/// a `default_headers` entry unable to displace them — that merge is
+/// a `default_headers` entry unable to displace them -- that merge is
 /// skip-if-present. A FORWARDED client header does displace the credential,
 /// deliberately: see [`apply_request_headers`].
 ///
@@ -506,6 +534,7 @@ impl Bridge for OpenAiBridge {
             outbound_bytes(&prepare_outbound_body(
                 &typed,
                 is_reasoning_model(ReasoningFamily::Openai, upstream),
+                &ctx.provider_key.provider,
                 ctx.provider_key.request.as_ref(),
                 ctx.provider_key.response.as_ref(),
             )?)?
@@ -557,12 +586,13 @@ impl Bridge for OpenAiBridge {
         let upstream = upstream_model(ctx)?;
 
         // Apply the PK's request overrides (param_renames / param_constraints /
-        // default_body_fields / default_headers) just like `chat()` — operators
+        // default_body_fields / default_headers) just like `chat()` -- operators
         // expect them on every endpoint that key serves, not chat only (#867
         // consistency follow-up). No-op when the PK carries no overrides.
         let body = outbound_bytes(&prepare_outbound_body(
             &embed_request_body(req, upstream),
             false,
+            &ctx.provider_key.provider,
             ctx.provider_key.request.as_ref(),
             ctx.provider_key.response.as_ref(),
         )?)?;
@@ -623,6 +653,7 @@ impl Bridge for OpenAiBridge {
             apply_outbound_overrides(
                 &mut outbound,
                 false,
+                &ctx.provider_key.provider,
                 ctx.provider_key.request.as_ref(),
                 ctx.provider_key.response.as_ref(),
             );
@@ -684,6 +715,7 @@ impl Bridge for OpenAiBridge {
             apply_outbound_overrides(
                 &mut outbound,
                 false,
+                &ctx.provider_key.provider,
                 ctx.provider_key.request.as_ref(),
                 ctx.provider_key.response.as_ref(),
             );
@@ -746,6 +778,7 @@ impl Bridge for OpenAiBridge {
             outbound_bytes(&prepare_outbound_body(
                 &typed,
                 is_reasoning_model(ReasoningFamily::Openai, upstream),
+                &ctx.provider_key.provider,
                 ctx.provider_key.request.as_ref(),
                 ctx.provider_key.response.as_ref(),
             )?)?
@@ -838,7 +871,7 @@ where
             }
         }
         // `decoder.finish()` flushes any event sitting in the tail
-        // buffer — an SSE stream that ends with `data: [DONE]\n\n`
+        // buffer -- an SSE stream that ends with `data: [DONE]\n\n`
         // gets the Done event from `feed`, but a stream that ends
         // with `data: [DONE]\n` (no trailing blank line) only surfaces
         // it here. Both forms occur in the wild (the OpenAI SDK
@@ -854,7 +887,7 @@ where
             }
             None => {}
         }
-        // Issue #302 §5 `response.stream_done_marker` — evaluate the
+        // Issue #302 §5 `response.stream_done_marker` -- evaluate the
         // policy once the stream ends. Violations are logged (operator
         // diagnostic) but never error the request: the customer's
         // chunks have already been delivered, and surfacing a wire-
@@ -902,7 +935,7 @@ fn parse_stream_chunk(
     };
     parsed.map_err(|serde_err| {
         // A frame that isn't a chunk may be the provider reporting an
-        // error inside the 200 stream (`{"error":{...}}`) — surface the
+        // error inside the 200 stream (`{"error":{...}}`) -- surface the
         // provider's own error instead of the serde failure.
         aisix_gateway::capture_in_band_error(payload, aisix_gateway::UpstreamWire::OpenAI)
             .unwrap_or(BridgeError::UpstreamDecode(serde_err))
@@ -955,7 +988,7 @@ mod tests {
         req.extra = extra;
         let messages = messages_from(&req, DeveloperRoleMode::Preserve);
         let typed = build_request(&req, "gpt-4o", &messages, false);
-        let body = prepare_outbound_body(&typed, false, None, None).unwrap();
+        let body = prepare_outbound_body(&typed, false, "openai", None, None).unwrap();
 
         assert_eq!(
             body["response_format"],
@@ -1005,10 +1038,33 @@ mod tests {
         );
         let messages = messages_from(&req, DeveloperRoleMode::Preserve);
         let typed = build_request(&req, "gpt-4o", &messages, false);
-        let body = prepare_outbound_body(&typed, false, None, None).unwrap();
+        let body = prepare_outbound_body(&typed, false, "openai", None, None).unwrap();
         // Not strict: the caller's `required` is theirs, and OpenAI does
         // not demand the closing.
         assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
+    }
+
+    #[test]
+    fn a_responses_only_field_is_stripped_for_a_non_openai_provider() {
+        use aisix_gateway::{ChatFormat, ChatMessage};
+
+        let mut req = ChatFormat::new("m", vec![ChatMessage::user("hi")]);
+        req.extra
+            .insert("prompt_cache_key".into(), serde_json::json!("sess-1"));
+        let messages = messages_from(&req, DeveloperRoleMode::Preserve);
+        let typed = build_request(&req, "gemini-3.1-pro-preview", &messages, false);
+
+        // Gemini's chat-completions surface rejects unknown names with 400,
+        // so the field must not survive the outbound body.
+        let gemini = prepare_outbound_body(&typed, false, "google", None, None).unwrap();
+        assert!(
+            gemini.get("prompt_cache_key").is_none(),
+            "prompt_cache_key leaked to a non-OpenAI upstream: {gemini}"
+        );
+
+        // Canonical OpenAI tolerates the extra field, so it stays.
+        let openai = prepare_outbound_body(&typed, false, "openai", None, None).unwrap();
+        assert_eq!(openai["prompt_cache_key"], serde_json::json!("sess-1"));
     }
     use aisix_core::{Model, ProviderKey};
     use aisix_gateway::{ChatMessage, FinishReason, Role};
@@ -1090,7 +1146,7 @@ mod tests {
         assert_eq!(
             s2.received_requests().await.unwrap().len(),
             1,
-            "after the edit the request follows the new host — a stale \
+            "after the edit the request follows the new host -- a stale \
              cached URL would have hit the original again"
         );
     }
@@ -1151,12 +1207,12 @@ mod tests {
     /// Audit fix (PR #323): the [`aisix_gateway::MAX_UPSTREAM_ERROR_BODY_BYTES`]
     /// (64 KB) cap must actually fire on an oversized upstream error
     /// body, otherwise a misbehaved upstream could pin a worker's
-    /// memory. Pins the cap as a regression test — exercises
+    /// memory. Pins the cap as a regression test -- exercises
     /// `read_body_capped` end-to-end through the OpenAI bridge.
     #[tokio::test]
     async fn non_streaming_oversize_error_body_truncated_to_max_message_bytes() {
         let server = MockServer::start().await;
-        // 200 KB body — well above the 64 KB read cap and the 1024-byte
+        // 200 KB body -- well above the 64 KB read cap and the 1024-byte
         // message cap.
         let huge_body = "x".repeat(200 * 1024);
         Mock::given(method("POST"))
@@ -1290,7 +1346,7 @@ mod tests {
     const OPENAI_401_BODY: &str = r#"{"error":{"message":"Incorrect API key provided: sk-inval***c66a. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","code":"invalid_api_key","param":null}}"#;
 
     /// Baseline: a 401 whose JSON error body is labelled
-    /// `application/json` parses correctly — `code` reaches the
+    /// `application/json` parses correctly -- `code` reaches the
     /// envelope. (Already worked pre-#543.)
     #[tokio::test]
     async fn non_streaming_401_json_content_type_surfaces_code() {
@@ -1354,7 +1410,7 @@ mod tests {
     }
 
     /// A genuinely non-JSON error body (HTML / plain text, no
-    /// `{"error":...}`) must still fall back cleanly — parse returns
+    /// `{"error":...}`) must still fall back cleanly -- parse returns
     /// None, no panic. Guards the opportunistic-parse change against
     /// over-parsing.
     #[tokio::test]
@@ -1610,7 +1666,7 @@ data: {\"error\":{\"message\":\"The server had an error processing your request\
 
     /// `OpenAiBridge::new()` is the `Adapter::Openai` family bridge.
     /// When it serves a non-openai vendor with empty `api_base` it
-    /// MUST refuse rather than fall back to `OPENAI_DEFAULT_BASE` —
+    /// MUST refuse rather than fall back to `OPENAI_DEFAULT_BASE` --
     /// that fallback would silently route the vendor's API key to
     /// `api.openai.com`. Closes the openrouter / xai half of
     /// api7/AISIX-Cloud#417.
@@ -1623,7 +1679,7 @@ data: {\"error\":{\"message\":\"The server had an error processing your request\
         //   perplexity).
         // - The three vendors that #379's clean cut deleted dedicated
         //   `register_specialized` entries for, so they now route only
-        //   through the family bridge (google, deepseek, cohere) — the
+        //   through the family bridge (google, deepseek, cohere) -- the
         //   bridge must refuse if cp-api ever ships them with empty
         //   `api_base`.
         // - Cased + whitespace variants to pin that the guard does
@@ -1671,7 +1727,7 @@ data: {\"error\":{\"message\":\"The server had an error processing your request\
     }
 
     /// Pure-openai PK without `api_base` falls back to
-    /// `OPENAI_DEFAULT_BASE` — the historical legacy behavior. The
+    /// `OPENAI_DEFAULT_BASE` -- the historical legacy behavior. The
     /// safety check above only fires for non-openai vendors.
     #[test]
     fn family_bridge_allows_openai_vendor_with_empty_api_base() {
@@ -1685,7 +1741,7 @@ data: {\"error\":{\"message\":\"The server had an error processing your request\
     }
 
     /// Pre-Phase-A PK carries an empty `provider` string. The safety
-    /// check must NOT fire here — those rows route via the compat
+    /// check must NOT fire here -- those rows route via the compat
     /// shim in `crates/aisix-proxy/src/dispatch.rs::resolve_bridge`
     /// to the specialized "openai" bridge. The bridge itself must
     /// tolerate the legacy shape so the compat path doesn't 500.
@@ -1740,7 +1796,7 @@ data: {\"error\":{\"message\":\"The server had an error processing your request\
     /// A non-canonical host (corporate proxy, alternative deployment,
     /// any vendor that isn't api.openai.com) passes through verbatim
     /// after endpoint-suffix stripping. The family bridge no longer
-    /// synthesizes vendor-specific URL prefixes — operators paste the
+    /// synthesizes vendor-specific URL prefixes -- operators paste the
     /// documented URL on the dashboard.
     #[test]
     fn non_openai_host_passes_through_verbatim_after_suffix_strip() {
@@ -2024,7 +2080,7 @@ data: {\"error\":{\"message\":\"The server had an error processing your request\
 
     /// `content_list_to_string=true` flattens the request body's
     /// `messages[*].content` array of text blocks into a string
-    /// before send (common gateway convention — applies to the request).
+    /// before send (common gateway convention -- applies to the request).
     /// The outbound body must carry `content: "abc"`, not the array.
     #[tokio::test]
     async fn chat_content_list_to_string_flattens_text_blocks_in_outbound_body() {
@@ -2099,7 +2155,7 @@ data: [DONE]\n\n";
     }
 
     /// `stream_done_marker` policy is evaluated but never errors the
-    /// stream — the contract is "log-only" so a working chat is not
+    /// stream -- the contract is "log-only" so a working chat is not
     /// broken by a wire-shape diagnostic. The test asserts that
     /// (a) the stream completes successfully, and (b) all chunks
     /// are delivered, even when policy=Required and the upstream
@@ -2107,7 +2163,7 @@ data: [DONE]\n\n";
     #[tokio::test]
     async fn chat_stream_done_marker_required_but_missing_does_not_error() {
         let server = MockServer::start().await;
-        // No `data: [DONE]` line — Required policy will fire a
+        // No `data: [DONE]` line -- Required policy will fire a
         // MissingDoneMarker warning, but the stream must still
         // complete cleanly.
         let sse = "\
@@ -2138,7 +2194,7 @@ data: {\"id\":\"cmpl-s\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\
 
     /// Negative axis on the parse path: a malformed SSE payload still
     /// surfaces as `UpstreamDecode` after the reasoning-field roundtrip
-    /// — the typed↔Value detour must not swallow parse errors.
+    /// -- the typed↔Value detour must not swallow parse errors.
     #[tokio::test]
     async fn chat_stream_malformed_chunk_surfaces_decode_error_via_reasoning_path() {
         let server = MockServer::start().await;
@@ -2167,7 +2223,7 @@ data: {\"id\":\"cmpl-s\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\
     /// Audit regression: a `data: [DONE]` line without the trailing
     /// blank line is held in `SseDecoder`'s tail buffer and only
     /// surfaces via `decoder.finish()`. The bridge must treat that as
-    /// "the marker was seen" — otherwise a policy=Required stream that
+    /// "the marker was seen" -- otherwise a policy=Required stream that
     /// happened to omit the trailing blank line would log a false-
     /// positive MissingDoneMarker warning. The customer-visible
     /// behavior we pin here: the chunks are yielded AND the stream
@@ -2178,7 +2234,7 @@ data: {\"id\":\"cmpl-s\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\
     #[tokio::test]
     async fn chat_stream_done_marker_in_decoder_finish_tail_is_counted_as_seen() {
         let server = MockServer::start().await;
-        // Note: NO trailing `\n\n` after [DONE] — exercises the
+        // Note: NO trailing `\n\n` after [DONE] -- exercises the
         // decoder.finish() flush path rather than feed().
         let sse = "\
 data: {\"id\":\"cmpl-s\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n\

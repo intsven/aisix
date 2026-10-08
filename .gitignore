@@ -43,3 +43,14 @@ coverage/
 
 # Local benchmark results collected by bench/onthebench/bench.sh
 /bench-results/
+
+# Local dev gateway config: carries live provider API keys in plaintext.
+/config.local.yaml
+/resources.yaml
+
+# cmd.exe redirection accident (">NUL" parsed as a filename)
+/$null
+
+# Scratch dir for local tooling: sync scripts, test harnesses, logs, and
+# downloaded archives. Not part of the build.
+/t/
